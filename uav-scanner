@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scan airframe QR</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #08111c; color: #e8f1fb;
+    }
+    .wrap { max-width: 520px; margin: 0 auto; padding: 20px 16px 40px; }
+    .kicker { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: #3ee0b2; font-weight: 600; }
+    h1 { margin: 6px 0 14px; font-size: 24px; }
+    #reader { width: 100%; border-radius: 16px; overflow: hidden; background: #05080e; min-height: 260px; }
+    #msg { margin: 14px 0; font-size: 14px; color: #8aa0b8; min-height: 20px; }
+    #msg.error { color: #ff6b6b; }
+    .btn {
+      display: block; width: 100%; text-align: center; text-decoration: none; cursor: pointer; border: 0;
+      border-radius: 12px; padding: 14px; font: 600 16px inherit; margin-top: 10px;
+      background: #132337; color: #e8f1fb; border: 1px solid #2d4d6d;
+    }
+    .btn.primary { background: linear-gradient(180deg, #4af0c0, #1fb98d); color: #06231b; border: 0; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">AIRVOLUTE UAV Checklist</div>
+  <h1>Scan airframe QR</h1>
+  <div id="reader"></div>
+  <p id="msg">Starting camera...</p>
+  <button class="btn primary" id="retryBtn" type="button" hidden>Try camera again</button>
+  <button class="btn" id="photoBtn" type="button">Take / upload photo instead</button>
+  <input type="file" id="fileInput" accept="image/*" hidden>
+  <a class="btn" id="backLink" href="#">Cancel and go back</a>
+</div>
+
+<script>
+  // Only allow returning to Apps Script web apps (prevents this page being used as an open redirect).
+  var ALLOWED_RETURN_PREFIX = 'https://script.google.com/';
+
+  var params = new URLSearchParams(location.search);
+  var returnUrl = params.get('return') || '';
+  var qr = null;
+  var finished = false;
+
+  function $(id) { return document.getElementById(id); }
+  function setMsg(text, isError) {
+    var el = $('msg');
+    el.textContent = text;
+    el.className = isError ? 'error' : '';
+  }
+
+  if (returnUrl.indexOf(ALLOWED_RETURN_PREFIX) !== 0) {
+    setMsg('Missing or invalid return address. Open this page from the checklist app.', true);
+    $('retryBtn').hidden = true;
+    $('photoBtn').hidden = true;
+    $('backLink').hidden = true;
+  } else {
+    $('backLink').href = returnUrl;
+    startCamera();
+  }
+
+  // The QR may contain just the serial, or a link like ".../exec?sn=P12345".
+  function extractSerial(text) {
+    text = String(text || '').trim();
+    try {
+      var u = new URL(text);
+      var sn = u.searchParams.get('sn');
+      if (sn) return sn;
+    } catch (e) {}
+    return text;
+  }
+
+  function finish(decodedText) {
+    if (finished) return;
+    finished = true;
+    var serial = extractSerial(decodedText);
+    var target = new URL(returnUrl);
+    target.searchParams.set('sn', serial);
+    setMsg('Found ' + serial + ' — returning to the checklist...');
+    var go = function() { location.href = target.toString(); };
+    if (qr) qr.stop().then(go).catch(go); else go();
+  }
+
+  function getQr() {
+    if (!qr) qr = new Html5Qrcode('reader');
+    return qr;
+  }
+
+  function startCamera() {
+    $('retryBtn').hidden = true;
+    setMsg('Starting camera...');
+    getQr().start(
+      { facingMode: 'environment' },
+      {
+        fps: 10,
+        qrbox: function(w, h) {
+          var s = Math.floor(Math.min(w, h) * 0.7);
+          return { width: s, height: s };
+        }
+      },
+      function(text) { finish(text); },
+      function() { /* no QR in this frame */ }
+    ).then(function() {
+      setMsg('Point the camera at the QR code and keep it inside the box.');
+    }).catch(function(err) {
+      setMsg('Camera could not start: ' + (err && err.message ? err.message : err) +
+        '. Allow camera access in the browser, or use the photo option below.', true);
+      $('retryBtn').hidden = false;
+    });
+  }
+
+  $('retryBtn').addEventListener('click', startCamera);
+  $('photoBtn').addEventListener('click', function() { $('fileInput').click(); });
+  $('fileInput').addEventListener('change', function(e) {
+    var file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    var run = function() {
+      getQr().scanFile(file, true)
+        .then(finish)
+        .catch(function(err) {
+          setMsg('Could not read a QR from that image: ' + (err && err.message ? err.message : err), true);
+        });
+    };
+    var running = false;
+    try { running = qr && qr.getState() === 2; } catch (x) {}
+    if (running) qr.stop().then(run).catch(run); else run();
+  });
+</script>
+</body>
+</html>
